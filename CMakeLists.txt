@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 
 add_compile_options( -W )
 add_compile_options( -Wall )
-add_compile_options( -Werror )
+#add_compile_options( -Werror )
 add_compile_options( -Wpedantic )
 
-add_executable(yandex_brown_course hash_person.cpp)
+add_executable(yandex_brown_course secondary_index.cpp)
