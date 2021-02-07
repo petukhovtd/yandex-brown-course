@@ -8,4 +8,4 @@ add_compile_options( -Wall )
 #add_compile_options( -Werror )
 add_compile_options( -Wpedantic )
 
-add_executable(yandex_brown_course test_ini.cpp ini.cpp)
+add_executable(yandex_brown_course refactoring.cpp xml.cpp json.cpp)
