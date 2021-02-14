@@ -8,4 +8,4 @@ add_compile_options( -Wall )
 #add_compile_options( -Werror )
 add_compile_options( -Wpedantic )
 
-add_executable(yandex_brown_course collide.cpp geo2d.cpp)
+add_executable(yandex_brown_course comment_server.cpp)
