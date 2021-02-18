@@ -8,4 +8,4 @@ add_compile_options( -Wall )
 #add_compile_options( -Werror )
 add_compile_options( -Wpedantic )
 
-add_executable(yandex_brown_course print_stats_2.cpp)
+add_executable(yandex_brown_course lazy_value.cpp)
