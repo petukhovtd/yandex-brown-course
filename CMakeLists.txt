@@ -8,5 +8,5 @@ add_compile_options( -Wall )
 #add_compile_options( -Werror )
 add_compile_options( -Wpedantic )
 
-add_executable(yandex_brown_course synchronized_2.cpp)
+add_executable(yandex_brown_course concurrent_map_2.cpp)
 target_link_libraries(yandex_brown_course pthread)
