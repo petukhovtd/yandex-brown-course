@@ -8,4 +8,5 @@ add_compile_options( -Wall )
 #add_compile_options( -Werror )
 add_compile_options( -Wpedantic )
 
-add_executable(yandex_brown_course lazy_value.cpp)
+add_executable(yandex_brown_course synchronized_2.cpp)
+target_link_libraries(yandex_brown_course pthread)
