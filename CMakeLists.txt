@@ -8,5 +8,5 @@ add_compile_options( -Wall )
 #add_compile_options( -Werror )
 add_compile_options( -Wpedantic )
 
-add_executable(yandex_brown_course texture_test.cpp Textures.cpp Solution.cpp)
+add_executable(yandex_brown_course cache_test.cpp Solution.cpp)
 target_link_libraries(yandex_brown_course pthread)

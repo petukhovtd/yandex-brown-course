@@ -1,160 +1,111 @@
+#include <utility>
+#include <unordered_map>
+#include <list>
+#include <set>
+#include <mutex>
+
 #include "Common.h"
-#include <iostream>
+
 using namespace std;
 
-// Этот файл сдаётся на проверку
-// Здесь напишите реализацию необходимых классов-потомков `IShape`
-class ShapeBase: public IShape
+class LruCache
+          : public ICache
 {
-public:
-     ~ShapeBase() override = default;
+     using Storage = list< BookPtr >;
+     using Iterator = Storage::iterator;
 
-     void SetPosition( Point point ) override
+     struct BookRank
      {
-          position_ = point;
-     }
+          BookPtr book;
+          size_t rank;
+     };
 
-     Point GetPosition() const override
+     struct NameRank
      {
-          return position_;
-     }
+          string name;
+          size_t rank;
 
-     void SetSize( Size size ) override
-     {
-          size_ = size;
-     }
-
-     Size GetSize() const override
-     {
-          return size_;
-     }
-
-     void SetTexture( std::shared_ptr< ITexture > ptr ) override
-     {
-          texture_ = ptr;
-     }
-
-     ITexture* GetTexture() const override
-     {
-          return texture_.get();
-     }
-
-protected:
-     bool InTexture( Point point ) const
-     {
-          if( !texture_ )
+          bool operator<( const NameRank& rhs ) const
           {
-               return false;
-          }
-          return point.x < texture_->GetSize().width && point.y < texture_->GetSize().height;
-     }
-
-protected:
-     Point position_;
-     Size size_;
-     std::shared_ptr< ITexture > texture_;
-};
-
-class ShapeRectangle: public ShapeBase
-{
-public:
-     unique_ptr< IShape > Clone() const override
-     {
-          unique_ptr< IShape > ptr = make_unique< ShapeRectangle >();
-          ptr->SetPosition( position_ );
-          ptr->SetSize( size_ );
-          ptr->SetTexture( texture_ );
-          return ptr;
-     }
-
-     void Draw( Image& image ) const final
-     {
-          const int imageYSize = image.size();
-          const int imageXSize = imageYSize == 0? 0: image.front().size();
-          if( position_.y >= imageYSize && position_.x >= imageXSize )
-          {
-               return;
-          }
-
-          const int yEnd = min( imageYSize, position_.y + size_.height );
-          const int xEnd = min( imageXSize, position_.x + size_.width );
-
-          for( int y = position_.y; y < yEnd; ++y )
-          {
-               const int yShape = y - position_.y;
-               for( int x = position_.x; x < xEnd; ++x )
+               if( rank == rhs.rank )
                {
-                    const int xShape = x - position_.x;
-                    if( InTexture( Point{ xShape, yShape } ) )
-                    {
-                         image[y][x] = texture_->GetImage()[ yShape ][ xShape ];
-                    }
-                    else
-                    {
-                         image[y][x] = '.';
-                    }
+                    return name < rhs.name;
                }
+               return rank < rhs.rank;
           }
-     }
-};
+     };
 
-
-class ShapeEllipse: public ShapeBase
-{
 public:
-     unique_ptr< IShape > Clone() const override
+     LruCache( shared_ptr< IBooksUnpacker > books_unpacker, const Settings& settings )
+               : books_unpacker_( move( books_unpacker ) )
+               , settings_( settings )
+               , currentMemory_( 0 )
+               , maxRank_( 0 )
      {
-          unique_ptr< IShape > ptr = make_unique< ShapeEllipse >();
-          ptr->SetPosition( position_ );
-          ptr->SetSize( size_ );
-          ptr->SetTexture( texture_ );
-          return ptr;
+          // реализуйте метод
      }
 
-     void Draw( Image& image ) const final
+     BookPtr GetBook( const string& book_name ) override
      {
-          const int imageYSize = image.size();
-          const int imageXSize = imageYSize == 0? 0: image.front().size();
-          if( position_.y >= imageYSize && position_.x >= imageXSize )
+          lock_guard< mutex > lock( m_ );
+          auto it = byName_.find( book_name );
+          if( it != byName_.end() )
           {
-               return;
-          }
-
-          const int yEnd = min( imageYSize, position_.y + size_.height );
-          const int xEnd = min( imageXSize, position_.x + size_.width );
-
-          for( int y = position_.y; y < yEnd; ++y )
-          {
-               const int yShape = y - position_.y;
-               for( int x = position_.x; x < xEnd; ++x )
+               if( it->second.rank == maxRank_ )
                {
-                    const int xShape = x - position_.x;
-                    if( !IsPointInEllipse( Point{ xShape, yShape }, size_ ) )
-                    {
-                         continue;
-                    }
-                    if( InTexture( Point{ xShape, yShape } ) )
-                    {
-                         image[y][x] = texture_->GetImage()[ yShape ][ xShape ];
-                    }
-                    else
-                    {
-                         image[y][x] = '.';
-                    }
+                    return it->second.book;
                }
+               ++maxRank_;
+               size_t lastRank = it->second.rank;
+               it->second.rank = maxRank_;
+               ranks_.erase( { book_name, lastRank } );
+               ranks_.insert( { book_name, maxRank_ } );
+               return it->second.book;
           }
+
+          unique_ptr< IBook > book = books_unpacker_->UnpackBook( book_name );
+          const size_t bookSize = book->GetContent().size();
+
+          if( bookSize > settings_.max_memory )
+          {
+               byName_.clear();
+               ranks_.clear();
+               currentMemory_ = 0;
+               maxRank_ = 0;
+               return BookPtr( book.release() );
+          }
+
+          BookPtr bookShared( book.release() );
+          ++maxRank_;
+          currentMemory_ += bookShared->GetContent().size();
+          byName_[ book_name ] = { bookShared, maxRank_ };
+          ranks_.insert( { book_name, maxRank_ } );
+
+          while( !ranks_.empty() && currentMemory_ > settings_.max_memory )
+          {
+               auto rem = ranks_.extract( ranks_.begin() );
+               auto remBook = byName_.extract( rem.value().name );
+               currentMemory_ -= remBook.mapped().book->GetContent().size();
+          }
+
+          return bookShared;
      }
+
+private:
+     shared_ptr< IBooksUnpacker > books_unpacker_;
+     Settings settings_;
+     unordered_map< string, BookRank > byName_;
+     set< NameRank > ranks_;
+     size_t currentMemory_;
+     size_t maxRank_;
+     mutex m_;
 };
 
-// Напишите реализацию функции
-unique_ptr<IShape> MakeShape(ShapeType shape_type) {
-     switch( shape_type )
-     {
-          case ShapeType::Rectangle:
-               return make_unique< ShapeRectangle >();
-          case ShapeType::Ellipse:
-               return make_unique< ShapeEllipse >();
-          default:
-               return nullptr;
-     }
+
+unique_ptr< ICache > MakeCache(
+          shared_ptr< IBooksUnpacker > books_unpacker,
+          const ICache::Settings& settings
+)
+{
+     return make_unique< LruCache >( move( books_unpacker ), settings );
 }
