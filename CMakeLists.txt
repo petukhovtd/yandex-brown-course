@@ -8,5 +8,5 @@ add_compile_options( -Wall )
 #add_compile_options( -Werror )
 add_compile_options( -Wpedantic )
 
-add_executable(yandex_brown_course budget_professional_desktop_version.cpp)
+add_executable(yandex_brown_course budget_good_base.cpp)
 target_link_libraries(yandex_brown_course pthread)
