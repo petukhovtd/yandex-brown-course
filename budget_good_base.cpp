@@ -119,23 +119,33 @@ bool AreSegmentsIntersected( IndexSegment lhs, IndexSegment rhs )
      return !( lhs.right <= rhs.left || rhs.right <= lhs.left );
 }
 
+struct DayState
+{
+     double income = 0.0;
+     double spend = 0.0;
+
+     double Compute() const
+     {
+          return income - spend;
+     }
+};
 
 struct BulkMoneyAdder
 {
-     double delta = 0.0;
+     DayState delta;
 };
 
 constexpr uint8_t TAX_PERCENTAGE = 13;
 
 struct BulkTaxApplier
 {
-     static constexpr double FACTOR = 1.0 - TAX_PERCENTAGE / 100.0;
-     uint32_t count = 0;
+     BulkTaxApplier() = default;
 
-     double ComputeFactor() const
-     {
-          return pow( FACTOR, count );
-     }
+     explicit BulkTaxApplier( uint8_t tax )
+     : factor( 1.0 - tax / 100.0 )
+     {}
+
+     double factor = 1;
 };
 
 class BulkLinearUpdater
@@ -153,13 +163,15 @@ public:
 
      void CombineWith( const BulkLinearUpdater& other )
      {
-          tax_.count += other.tax_.count;
-          add_.delta = add_.delta * other.tax_.ComputeFactor() + other.add_.delta;
+          tax_.factor *= other.tax_.factor;
+          add_.delta.income = add_.delta.income * other.tax_.factor + other.add_.delta.income;
+          add_.delta.spend += other.add_.delta.spend;
      }
 
-     double Collapse( double origin, IndexSegment segment ) const
+     DayState Collapse( DayState origin, IndexSegment segment ) const
      {
-          return origin * tax_.ComputeFactor() + add_.delta * segment.length();
+          return { .income = origin.income * tax_.factor + add_.delta.income * segment.length(),
+                   .spend = origin.spend + add_.delta.spend * segment.length() };
      }
 
 private:
@@ -280,7 +292,8 @@ private:
           Data
           ProcessPartial( const NodeHolder&, IndexSegment, const Data& left_result, const Data& right_result ) const
           {
-               return left_result + right_result;
+               return { .income = left_result.income + right_result.income,
+                        .spend = left_result.spend + right_result.spend };
           }
      };
 
@@ -304,7 +317,9 @@ private:
 
           void ProcessPartial( const NodeHolder& node, IndexSegment ) const
           {
-               node->data = ( node->left? node->left->data: Data() ) + ( node->right? node->right->data: Data() );
+               node->data = { ( node->left? node->left->data.income: Data().income ) + ( node->right? node->right->data.income: Data().income ),
+                              ( node->left? node->left->data.spend: Data().spend ) + ( node->right? node->right->data.spend: Data().spend )
+               };
           }
 
      private:
@@ -389,7 +404,7 @@ IndexSegment MakeDateSegment( const Date& date_from, const Date& date_to )
 
 
 class BudgetManager
-          : public SummingSegmentTree< double, BulkLinearUpdater >
+          : public SummingSegmentTree< DayState, BulkLinearUpdater >
 {
 public:
      BudgetManager()
@@ -407,7 +422,8 @@ struct Request
      {
           COMPUTE_INCOME,
           EARN,
-          PAY_TAX
+          PAY_TAX,
+          SPEND
      };
 
      Request( Type type )
@@ -427,6 +443,7 @@ const unordered_map< string_view, Request::Type > STR_TO_REQUEST_TYPE = {
           { "ComputeIncome", Request::Type::COMPUTE_INCOME },
           { "Earn",          Request::Type::EARN },
           { "PayTax",        Request::Type::PAY_TAX },
+          { "Spend",        Request::Type::SPEND },
 };
 
 template< typename ResultType >
@@ -461,7 +478,7 @@ struct ComputeIncomeRequest
 
      double Process( const BudgetManager& manager ) const override
      {
-          return manager.ComputeSum( MakeDateSegment( date_from, date_to ) );
+          return manager.ComputeSum( MakeDateSegment( date_from, date_to ) ).Compute();
      }
 
      Date date_from = START_DATE;
@@ -504,16 +521,44 @@ struct PayTaxRequest
      void ParseFrom( string_view input ) override
      {
           date_from = Date::FromString( ReadToken( input ) );
-          date_to = Date::FromString( input );
+          date_to = Date::FromString( ReadToken( input ) );
+          tax = ConvertToInt( input );
      }
 
      void Process( BudgetManager& manager ) const override
      {
-          manager.AddBulkOperation( MakeDateSegment( date_from, date_to ), BulkTaxApplier { 1 } );
+          manager.AddBulkOperation( MakeDateSegment( date_from, date_to ), BulkTaxApplier { tax } );
      }
 
      Date date_from = START_DATE;
      Date date_to = START_DATE;
+     uint8_t tax = 13;
+};
+
+struct SpendRequest
+          : ModifyRequest
+{
+     SpendRequest()
+               : ModifyRequest( Type::SPEND )
+     {}
+
+     void ParseFrom( string_view input ) override
+     {
+          date_from = Date::FromString( ReadToken( input ) );
+          date_to = Date::FromString( ReadToken( input ) );
+          spend = ConvertToInt( input );
+     }
+
+     void Process( BudgetManager& manager ) const override
+     {
+          const auto date_segment = MakeDateSegment( date_from, date_to );
+          const double daily_spend = spend * 1.0 / date_segment.length();
+          manager.AddBulkOperation( date_segment, BulkMoneyAdder { 0, daily_spend } );
+     }
+
+     Date date_from = START_DATE;
+     Date date_to = START_DATE;
+     size_t spend = 0;
 };
 
 RequestHolder Request::Create( Request::Type type )
@@ -526,6 +571,8 @@ RequestHolder Request::Create( Request::Type type )
                return make_unique< EarnRequest >();
           case Request::Type::PAY_TAX:
                return make_unique< PayTaxRequest >();
+          case Request::Type::SPEND:
+               return make_unique< SpendRequest >();
           default:
                return nullptr;
      }
@@ -616,9 +663,35 @@ void PrintResponses( const vector< double >& responses, ostream& stream = cout )
      }
 }
 
+void Test()
+{
+     static const std::string input = "8\n"
+                                      "Earn 2000-01-02 2000-01-06 20\n"
+                                      "ComputeIncome 2000-01-01 2001-01-01\n"
+                                      "PayTax 2000-01-02 2000-01-03 13\n"
+                                      "ComputeIncome 2000-01-01 2001-01-01\n"
+                                      "Spend 2000-12-30 2001-01-02 14\n"
+                                      "ComputeIncome 2000-01-01 2001-01-01\n"
+                                      "PayTax 2000-12-30 2000-12-30 13\n"
+                                      "ComputeIncome 2000-01-01 2001-01-01\n";
+     std::stringstream is( input );
+
+     cout.precision( 25 );
+     const auto requests = ReadRequests( is );
+     const auto responses = ProcessRequests( requests );
+     PrintResponses( responses );
+
+     //20
+     //18.96
+     //8.46
+     //8.46
+}
 
 int main()
 {
+//     Test();
+//     return 0;
+
      cout.precision( 25 );
      const auto requests = ReadRequests();
      const auto responses = ProcessRequests( requests );
