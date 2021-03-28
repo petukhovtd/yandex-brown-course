@@ -85,6 +85,11 @@ public:
           return uniqueStops_.size();
      }
 
+     const std::set< std::string >& GetUniqueStopsList() const
+     {
+          return uniqueStops_;
+     }
+
      double GetLength( const LengthCalculator& lengthCalculator )
      {
           if( length_.has_value() )
@@ -121,14 +126,24 @@ private:
 
 class Transport
 {
+     struct StopInfo
+     {
+          std::optional< Stop > stop;
+          std::set< std::string > buses;
+     };
+
 public:
      void AddStop( std::string name, Stop stop )
      {
-          stops_.insert( { std::move( name ), stop } );
+          stops_[ std::move( name ) ].stop = stop;
      }
 
      void AddBus( std::string name, Bus bus )
      {
+          for( const auto& stop: bus.GetUniqueStopsList() )
+          {
+               stops_[ stop ].buses.insert( name );
+          }
           buses_.insert( { std::move( name ), std::move( bus ) } );
      }
 
@@ -143,17 +158,27 @@ public:
           return Bus::Stats { bus.GetStopsOnRoute(), bus.GetUniqueStops(), bus.GetLength( GetBusLengthCalculator() ) };
      }
 
+     const std::set< std::string >* GetStopBusList( const std::string& name ) const
+     {
+          auto it = stops_.find( name );
+          if( it == stops_.end() )
+          {
+               return nullptr;
+          }
+          return &it->second.buses;
+     }
+
 private:
      Bus::LengthCalculator GetBusLengthCalculator()
      {
           return [ = ]( const std::string& s1, const std::string& s2 )->double
           {
-               return CalculateLength( stops_.at( s1 ), stops_.at( s2 ) );
+               return CalculateLength( stops_.at( s1 ).stop.value(), stops_.at( s2 ).stop.value() );
           };
      }
 
 private:
-     std::unordered_map< std::string, Stop > stops_;
+     std::unordered_map< std::string, StopInfo > stops_;
      std::unordered_map< std::string, Bus > buses_;
 };
 
@@ -335,6 +360,42 @@ struct GetBusStats
      std::string busName;
 };
 
+struct GetStopBusList: public GetRequest
+{
+     ~GetStopBusList() override = default;
+
+     void ParsingFrom( std::string_view str ) override
+     {
+          stopName = Trim( str );
+     }
+
+     std::string Process( Transport& transport ) const override
+     {
+          auto* busList = transport.GetStopBusList( stopName );
+          std::ostringstream os;
+          os << "Stop " << stopName << ": ";
+          if( !busList )
+          {
+               os << "not found";
+          }
+          else if( busList->empty() )
+          {
+               os << "no buses";
+          }
+          else
+          {
+               os << "buses";
+               for( const auto& bus: *busList )
+               {
+                    os << " " << bus;
+               }
+          }
+          return os.str();
+     }
+
+     std::string stopName;
+};
+
 size_t ReadRequestNumber( std::istream& in )
 {
      size_t num;
@@ -357,6 +418,8 @@ RequestPtr ParsingRequest( Request::Type type, std::string_view str )
                     request = std::make_unique< AddStop >();
                     break;
                case Request::Get:
+                    request = std::make_unique< GetStopBusList >();
+                    break;
                default:
                     assert( false );
           }
@@ -582,6 +645,44 @@ void RWTest()
      ASSERT_EQUAL( outStr, os.str() );
 }
 
+void RWTestPartB()
+{
+     static const std::string inputStr = "13\n"
+                                         "Stop Tolstopaltsevo: 55.611087, 37.20829\n"
+                                         "Stop Marushkino: 55.595884, 37.209755\n"
+                                         "Bus 256: Biryulyovo Zapadnoye > Biryusinka > Universam > Biryulyovo Tovarnaya > Biryulyovo Passazhirskaya > Biryulyovo Zapadnoye\n"
+                                         "Bus 750: Tolstopaltsevo - Marushkino - Rasskazovka\n"
+                                         "Stop Rasskazovka: 55.632761, 37.333324\n"
+                                         "Stop Biryulyovo Zapadnoye: 55.574371, 37.6517\n"
+                                         "Stop Biryusinka: 55.581065, 37.64839\n"
+                                         "Stop Universam: 55.587655, 37.645687\n"
+                                         "Stop Biryulyovo Tovarnaya: 55.592028, 37.653656\n"
+                                         "Stop Biryulyovo Passazhirskaya: 55.580999, 37.659164\n"
+                                         "Bus 828: Biryulyovo Zapadnoye > Universam > Rossoshanskaya ulitsa > Biryulyovo Zapadnoye\n"
+                                         "Stop Rossoshanskaya ulitsa: 55.595579, 37.605757\n"
+                                         "Stop Prazhskaya: 55.611678, 37.603831\n"
+                                         "6\n"
+                                         "Bus 256\n"
+                                         "Bus 750\n"
+                                         "Bus 751\n"
+                                         "Stop Samara\n"
+                                         "Stop Prazhskaya\n"
+                                         "Stop Biryulyovo Zapadnoye\n";
+     std::stringstream in( inputStr );
+     std::stringstream os;
+     auto requests = ReadRequests( in );
+     auto responses = ProcessRequests( requests );
+     PrintResponses( responses, os );
+
+     std::string outStr = "Bus 256: 6 stops on route, 5 unique stops, 4371.02 route length\n"
+                          "Bus 750: 5 stops on route, 3 unique stops, 20939.5 route length\n"
+                          "Bus 751: not found\n"
+                          "Stop Samara: not found\n"
+                          "Stop Prazhskaya: no buses\n"
+                          "Stop Biryulyovo Zapadnoye: buses 256 828\n";
+     ASSERT_EQUAL( outStr, os.str() );
+}
+
 void TrimTest()
 {
      ASSERT_EQUAL( "abc", Trim( " abc " ) );
@@ -601,8 +702,9 @@ int main()
 //     RUN_TEST( testRunner, ParsingBusTest );
 //     RUN_TEST( testRunner, RWTest );
 //     RUN_TEST( testRunner, TrimTest );
+//     RUN_TEST( testRunner, RWTestPartB );
 //     return 0;
-//
+
      auto requests = ReadRequests();
      auto responses = ProcessRequests( requests );
      PrintResponses( responses );
