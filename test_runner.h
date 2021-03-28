@@ -113,7 +113,7 @@ private:
 }
 
 #define ASSERT(x) {                     \
-  ostringstream os;                     \
+  std::ostringstream os;                     \
   os << #x << " is false, "             \
     << __FILE__ << ":" << __LINE__;     \
   Assert(x, os.str());                  \
