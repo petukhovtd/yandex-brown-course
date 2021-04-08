@@ -44,18 +44,38 @@ public:
           Circular
      };
 
+     struct LengthInfo
+     {
+          double length;
+          double roadLength;
+
+          LengthInfo& operator+=( const LengthInfo& other )
+          {
+               length += other.length;
+               roadLength += other.roadLength;
+               return *this;
+          }
+
+          LengthInfo& operator*=( int num )
+          {
+               length *= num;
+               roadLength *= num;
+               return *this;
+          }
+     };
+
      struct Stats
      {
           size_t stops;
           size_t uniqueStops;
-          double length;
+          LengthInfo lengthInfo;
      };
 
-     using LengthCalculator = std::function< double( const std::string&, const std::string& ) >;
+     using LengthCalculator = std::function< LengthInfo( const std::string&, const std::string& ) >;
 
      explicit Bus( Type type )
                : type_( type )
-               , length_()
+               , lengthInfo_()
                , stops_()
                , uniqueStops_()
      {}
@@ -90,36 +110,35 @@ public:
           return uniqueStops_;
      }
 
-     double GetLength( const LengthCalculator& lengthCalculator )
+     LengthInfo GetLength( const LengthCalculator& lengthCalculator )
      {
-          if( length_.has_value() )
+          if( lengthInfo_.has_value() )
           {
-               return length_.value();
+               return lengthInfo_.value();
           }
 
-          length_ = 0;
+          lengthInfo_ = { 0, 0 };
 
           if( stops_.empty() )
           {
-               return length_.value();
+               return lengthInfo_.value();
           }
 
           for( size_t i = 0; i < ( stops_.size() - 1 ); ++i )
           {
-               length_.value() += lengthCalculator( stops_[ i ], stops_[ i + 1 ] );
+               lengthInfo_.value() += lengthCalculator( stops_[ i ], stops_[ i + 1 ] );
+               if( type_ == Linear )
+               {
+                    lengthInfo_.value() += lengthCalculator( stops_[ i + 1 ], stops_[ i ] );
+               }
           }
 
-          if( type_ == Linear )
-          {
-               length_.value() *= 2;
-          }
-
-          return length_.value();
+          return lengthInfo_.value();
      }
 
 private:
      Type type_;
-     std::optional< double > length_;
+     std::optional< LengthInfo > lengthInfo_;
      std::vector< std::string > stops_;
      std::set< std::string > uniqueStops_;
 };
@@ -130,12 +149,23 @@ class Transport
      {
           std::optional< Stop > stop;
           std::set< std::string > buses;
+          std::unordered_map< std::string, unsigned int > roadLength;
      };
 
 public:
-     void AddStop( std::string name, Stop stop )
+     void AddStop( const std::string& stopName, Stop stop, const std::vector< std::pair< std::string, unsigned int >>& roadLength )
      {
-          stops_[ std::move( name ) ].stop = stop;
+          StopInfo& stopInfo = stops_[ stopName ];
+          stopInfo.stop = stop;
+          for( const auto& [ otherStopName, length ]: roadLength )
+          {
+               stopInfo.roadLength[ otherStopName ] = length;
+               StopInfo& otherStop = stops_[ otherStopName ];
+               if( otherStop.roadLength.count( stopName ) == 0 )
+               {
+                    stops_[ otherStopName ].roadLength[ stopName ] = length;
+               }
+          }
      }
 
      void AddBus( std::string name, Bus bus )
@@ -171,9 +201,12 @@ public:
 private:
      Bus::LengthCalculator GetBusLengthCalculator()
      {
-          return [ = ]( const std::string& s1, const std::string& s2 )->double
+          return [ = ]( const std::string& s1, const std::string& s2 )->Bus::LengthInfo
           {
-               return CalculateLength( stops_.at( s1 ).stop.value(), stops_.at( s2 ).stop.value() );
+               Bus::LengthInfo lengthInfo{};
+               lengthInfo.length = CalculateLength( stops_.at( s1 ).stop.value(), stops_.at( s2 ).stop.value() );
+               lengthInfo.roadLength = stops_.at( s1 ).roadLength[ s2 ];
+               return lengthInfo;
           };
      }
 
@@ -269,15 +302,24 @@ struct AddStop
           std::string_view lan = ReadToken( str, "," );
           std::string_view lon = ReadToken( str, "," );
           stop = Stop( std::stod( std::string( lan ) ), std::stod( std::string( lon ) ) );
+
+          while( !str.empty() )
+          {
+               std::string_view roadLengthStr = Trim( ReadToken( str, "," ) );
+               unsigned int length = std::stoul( std::string( Trim( ReadToken( roadLengthStr, "m" ) ) ), nullptr, 10 );
+               roadLengthStr.remove_prefix( 4 );
+               roadLength.emplace_back( roadLengthStr, length );
+          }
      }
 
      void Process( Transport& transport ) const override
      {
-          transport.AddStop( stopName, stop.value() );
+          transport.AddStop( stopName, stop.value(), roadLength );
      }
 
      std::string stopName;
      std::optional< Stop > stop;
+     std::vector< std::pair< std::string, unsigned int >> roadLength;
 };
 
 struct AddBus
@@ -353,7 +395,8 @@ struct GetBusStats
           }
 
           os << stats.value().stops << " stops on route, " << stats.value().uniqueStops << " unique stops, "
-             << stats.value().length << " route length";
+             << stats.value().lengthInfo.roadLength << " route length, "
+             << stats.value().lengthInfo.roadLength / stats.value().lengthInfo.length << " curvature";
           return os.str();
      }
 
@@ -499,7 +542,7 @@ void BusTest()
 {
      Bus::LengthCalculator calc = []( const std::string&, const std::string& )
      {
-          return 1;
+          return Bus::LengthInfo{ 1, 2 };
      };
 
      {
@@ -512,7 +555,8 @@ void BusTest()
           bus.AddStop( "Biryulyovo Zapadnoye" );
           ASSERT_EQUAL( bus.GetStopsOnRoute(), 6 )
           ASSERT_EQUAL( bus.GetUniqueStops(), 5 )
-          ASSERT_EQUAL( bus.GetLength( calc ), 5 )
+          ASSERT_EQUAL( bus.GetLength( calc ).length, 5 )
+          ASSERT_EQUAL( bus.GetLength( calc ).roadLength, 10 )
      }
      {
           Bus bus( Bus::Linear );
@@ -521,7 +565,8 @@ void BusTest()
           bus.AddStop( "Rasskazovka" );
           ASSERT_EQUAL( bus.GetStopsOnRoute(), 5 )
           ASSERT_EQUAL( bus.GetUniqueStops(), 3 )
-          ASSERT_EQUAL( bus.GetLength( calc ), 4 )
+          ASSERT_EQUAL( bus.GetLength( calc ).length, 4 )
+          ASSERT_EQUAL( bus.GetLength( calc ).roadLength, 8 )
      }
 }
 
@@ -542,9 +587,9 @@ void StopTest()
 void TransportTest()
 {
      Transport transport;
-     transport.AddStop( "Tolstopaltsevo", Stop( 55.611087, 37.20829 ) );
-     transport.AddStop( "Marushkino", Stop( 55.595884, 37.209755 ) );
-     transport.AddStop( "Rasskazovka", Stop( 55.632761, 37.333324 ) );
+     transport.AddStop( "Tolstopaltsevo", Stop( 55.611087, 37.20829 ), { { "Marushkino", 3900 } } );
+     transport.AddStop( "Marushkino", Stop( 55.595884, 37.209755 ), { { "Rasskazovka", 9900 } } );
+     transport.AddStop( "Rasskazovka", Stop( 55.632761, 37.333324 ), {} );
      {
           Bus bus( Bus::Linear );
           bus.AddStop( "Tolstopaltsevo" );
@@ -557,9 +602,23 @@ void TransportTest()
           ASSERT( stats.has_value() );
           ASSERT_EQUAL( stats.value().stops, 5 );
           ASSERT_EQUAL( stats.value().uniqueStops, 3 );
-          std::ostringstream os;
-          os << std::setprecision( 6 ) << stats.value().length;
-          ASSERT_EQUAL( os.str(), "20939.5" );
+          ASSERT_EQUAL( stats.value().lengthInfo.roadLength, 27600 );
+          {
+               std::ostringstream os;
+               os << std::setprecision( 6 ) << stats.value().lengthInfo.length;
+               ASSERT_EQUAL( os.str(), "20939.5" );
+          }
+          {
+               std::ostringstream os;
+               os << std::setprecision( 6 ) << stats.value().lengthInfo.roadLength;
+               ASSERT_EQUAL( os.str(), "27600" );
+          }
+          {
+               std::ostringstream os;
+               os << std::setprecision( 6 ) << stats.value().lengthInfo.roadLength / stats.value().lengthInfo.length;
+               ASSERT_EQUAL( os.str(), "1.31808" );
+          }
+
      }
 
 
@@ -573,91 +632,125 @@ void TransportTest()
           bus.AddStop( "Biryulyovo Zapadnoye" );
           transport.AddBus( "256", std::move( bus ) );
      }
-     transport.AddStop( "Biryulyovo Zapadnoye", Stop( 55.574371, 37.6517 ) );
-     transport.AddStop( "Biryusinka", Stop( 55.581065, 37.64839 ) );
-     transport.AddStop( "Universam", Stop( 55.587655, 37.645687 ) );
-     transport.AddStop( "Biryulyovo Tovarnaya", Stop( 55.592028, 37.653656 ) );
-     transport.AddStop( "Biryulyovo Passazhirskaya", Stop( 55.580999, 37.659164 ) );
+     transport.AddStop( "Biryulyovo Zapadnoye", Stop( 55.574371, 37.6517 ),
+                        { { "Rossoshanskaya ulitsa", 7500 },
+                          { "Biryusinka",            1800 },
+                          { "Universam",             2400 } }
+     );
+     transport.AddStop( "Biryusinka", Stop( 55.581065, 37.64839 ), { { "Universam", 750 } } );
+     transport.AddStop( "Universam", Stop( 55.587655, 37.645687 ),
+                        { { "Rossoshanskaya ulitsa", 5600 },
+                          { "Biryulyovo Tovarnaya",  900 } }
+     );
+     transport.AddStop( "Biryulyovo Tovarnaya", Stop( 55.592028, 37.653656 ), { { "Biryulyovo Passazhirskaya", 1300 } } );
+     transport.AddStop( "Biryulyovo Passazhirskaya", Stop( 55.580999, 37.659164 ), { { "Biryulyovo Zapadnoye", 1200 } } );
 
      {
           auto stats = transport.GetBusStats( "256" );
           ASSERT( stats.has_value() );
           ASSERT_EQUAL( stats.value().stops, 6 );
           ASSERT_EQUAL( stats.value().uniqueStops, 5 );
-          std::ostringstream os;
-          os << std::setprecision( 6 ) << stats.value().length;
-          ASSERT_EQUAL( os.str(), "4371.02" );
+          {
+               std::ostringstream os;
+               os << std::setprecision( 6 ) << stats.value().lengthInfo.length;
+               ASSERT_EQUAL( os.str(), "4371.02" );
+          }
+          {
+               std::ostringstream os;
+               os << std::setprecision( 6 ) << stats.value().lengthInfo.roadLength;
+               ASSERT_EQUAL( os.str(), "5950" );
+          }
+          {
+               std::ostringstream os;
+               os << std::setprecision( 6 ) << stats.value().lengthInfo.roadLength / stats.value().lengthInfo.length;
+
+               double res = round(stats.value().lengthInfo.roadLength * 1000000 / stats.value().lengthInfo.length) / 1000000;
+               ASSERT_EQUAL( os.str(), "1.36124" );
+          }
      }
 
      {
           auto stats = transport.GetBusStats( "751" );
           ASSERT( !stats.has_value() );
      }
+
+     {
+          auto* res = transport.GetStopBusList( "Samara" );
+          ASSERT( res == nullptr );
+     }
+     {
+          transport.AddStop( "Prazhskaya", Stop( 55.611678, 37.603831 ), { } );
+          auto* res = transport.GetStopBusList( "Prazhskaya" );
+          ASSERT( res->empty() );
+     }
+     {
+          auto* res = transport.GetStopBusList( "Biryulyovo Zapadnoye" );
+          ASSERT_EQUAL( res->size(), 1 );
+     }
 }
 
 void ParsingStopTest()
 {
-     AddStop addStop;
-     std::string s = "Tolstopaltsevo asd: 55.611087, 37.20829";
-     addStop.ParsingFrom( s );
-     ASSERT_EQUAL( addStop.stopName, "Tolstopaltsevo asd" );
-     ASSERT( addStop.stop.value().lat > 0 );
-     ASSERT( addStop.stop.value().lon > 0 );
+     {
+          AddStop addStop;
+          std::string s = "Tolstopaltsevo asd: 55.611087, 37.20829";
+          addStop.ParsingFrom( s );
+          ASSERT_EQUAL( addStop.stopName, "Tolstopaltsevo asd" )
+          ASSERT( addStop.stop.value().lat > 0 )
+          ASSERT( addStop.stop.value().lon > 0 )
+     }
+     {
+          AddStop addStop;
+          std::string s = "Biryulyovo Zapadnoye: 55.574371, 37.6517, 7500m to Rossoshanskaya ulitsa, 1800m to Biryusinka, 2400m to Universam";
+          addStop.ParsingFrom( s );
+          ASSERT_EQUAL( addStop.stopName, "Biryulyovo Zapadnoye" )
+          ASSERT( addStop.stop.value().lat > 0 )
+          ASSERT( addStop.stop.value().lon > 0 )
+          ASSERT_EQUAL( addStop.roadLength.size(), 3 )
+          ASSERT_EQUAL( addStop.roadLength[ 0 ].first, "Rossoshanskaya ulitsa" )
+          ASSERT_EQUAL( addStop.roadLength[ 0 ].second, 7500 )
+          ASSERT_EQUAL( addStop.roadLength[ 1 ].first, "Biryusinka" )
+          ASSERT_EQUAL( addStop.roadLength[ 1 ].second, 1800 )
+          ASSERT_EQUAL( addStop.roadLength[ 2 ].first, "Universam" )
+          ASSERT_EQUAL( addStop.roadLength[ 2 ].second, 2400 )
+     }
+
 }
 
 void ParsingBusTest()
 {
-     AddBus addBus;
-     std::string s = "256: Biryulyovo Zapadnoye > Biryusinka > Universam > Biryulyovo Tovarnaya > Biryulyovo Passazhirskaya > Biryulyovo Zapadnoye";
-     addBus.ParsingFrom( s );
-     ASSERT_EQUAL( addBus.busName, "256" );
-     ASSERT_EQUAL( addBus.bus.value().GetStopsOnRoute(), 6 );
-     ASSERT_EQUAL( addBus.bus.value().GetUniqueStops(), 5 );
+     {
+          AddBus addBus;
+          std::string s = "256: Biryulyovo Zapadnoye > Biryusinka > Universam > Biryulyovo Tovarnaya > Biryulyovo Passazhirskaya > Biryulyovo Zapadnoye";
+          addBus.ParsingFrom( s );
+          ASSERT_EQUAL( addBus.busName, "256" );
+          ASSERT_EQUAL( addBus.bus.value().GetStopsOnRoute(), 6 );
+          ASSERT_EQUAL( addBus.bus.value().GetUniqueStops(), 5 );
+     }
+     {
+          AddBus addBus;
+          std::string s = "750 a: Tolstopaltsevo - Marushkino - Rasskazovka";
+          addBus.ParsingFrom( s );
+          ASSERT_EQUAL( addBus.busName, "750 a" );
+          ASSERT_EQUAL( addBus.bus.value().GetStopsOnRoute(), 5 );
+          ASSERT_EQUAL( addBus.bus.value().GetUniqueStops(), 3 );
+     }
 
 }
 
-void RWTest()
-{
-     static const std::string inputStr = "10\n"
-                                         "Stop Tolstopaltsevo: 55.611087, 37.20829\n"
-                                         "Stop Marushkino: 55.595884, 37.209755\n"
-                                         "Bus 256 aaa: Biryulyovo Zapadnoye > Biryusinka > Universam > Biryulyovo Tovarnaya > Biryulyovo Passazhirskaya > Biryulyovo Zapadnoye\n"
-                                         "Bus 750: Tolstopaltsevo - Marushkino - Rasskazovka\n"
-                                         "Stop Rasskazovka: 55.632761, 37.333324\n"
-                                         "Stop Biryulyovo Zapadnoye: 55.574371, 37.6517\n"
-                                         "Stop Biryusinka: 55.581065, 37.64839\n"
-                                         "Stop Universam: 55.587655, 37.645687\n"
-                                         "Stop Biryulyovo Tovarnaya: 55.592028, 37.653656\n"
-                                         "Stop Biryulyovo Passazhirskaya: 55.580999, 37.659164\n"
-                                         "3\n"
-                                         "Bus 256 aaa\n"
-                                         "Bus 750\n"
-                                         "Bus 751\n";
-     std::stringstream in( inputStr );
-     std::stringstream os;
-     auto requests = ReadRequests( in );
-     auto responses = ProcessRequests( requests );
-     PrintResponses( responses, os );
-
-     std::string outStr = "Bus 256 aaa: 6 stops on route, 5 unique stops, 4371.02 route length\n"
-                          "Bus 750: 5 stops on route, 3 unique stops, 20939.5 route length\n"
-                          "Bus 751: not found\n";
-     ASSERT_EQUAL( outStr, os.str() );
-}
-
-void RWTestPartB()
+void RWTestPartC()
 {
      static const std::string inputStr = "13\n"
-                                         "Stop Tolstopaltsevo: 55.611087, 37.20829\n"
-                                         "Stop Marushkino: 55.595884, 37.209755\n"
+                                         "Stop Tolstopaltsevo: 55.611087, 37.20829, 3900m to Marushkino\n"
+                                         "Stop Marushkino: 55.595884, 37.209755, 9900m to Rasskazovka\n"
                                          "Bus 256: Biryulyovo Zapadnoye > Biryusinka > Universam > Biryulyovo Tovarnaya > Biryulyovo Passazhirskaya > Biryulyovo Zapadnoye\n"
                                          "Bus 750: Tolstopaltsevo - Marushkino - Rasskazovka\n"
                                          "Stop Rasskazovka: 55.632761, 37.333324\n"
-                                         "Stop Biryulyovo Zapadnoye: 55.574371, 37.6517\n"
-                                         "Stop Biryusinka: 55.581065, 37.64839\n"
-                                         "Stop Universam: 55.587655, 37.645687\n"
-                                         "Stop Biryulyovo Tovarnaya: 55.592028, 37.653656\n"
-                                         "Stop Biryulyovo Passazhirskaya: 55.580999, 37.659164\n"
+                                         "Stop Biryulyovo Zapadnoye: 55.574371, 37.6517, 7500m to Rossoshanskaya ulitsa, 1800m to Biryusinka, 2400m to Universam\n"
+                                         "Stop Biryusinka: 55.581065, 37.64839, 750m to Universam\n"
+                                         "Stop Universam: 55.587655, 37.645687, 5600m to Rossoshanskaya ulitsa, 900m to Biryulyovo Tovarnaya\n"
+                                         "Stop Biryulyovo Tovarnaya: 55.592028, 37.653656, 1300m to Biryulyovo Passazhirskaya\n"
+                                         "Stop Biryulyovo Passazhirskaya: 55.580999, 37.659164, 1200m to Biryulyovo Zapadnoye\n"
                                          "Bus 828: Biryulyovo Zapadnoye > Universam > Rossoshanskaya ulitsa > Biryulyovo Zapadnoye\n"
                                          "Stop Rossoshanskaya ulitsa: 55.595579, 37.605757\n"
                                          "Stop Prazhskaya: 55.611678, 37.603831\n"
@@ -674,8 +767,8 @@ void RWTestPartB()
      auto responses = ProcessRequests( requests );
      PrintResponses( responses, os );
 
-     std::string outStr = "Bus 256: 6 stops on route, 5 unique stops, 4371.02 route length\n"
-                          "Bus 750: 5 stops on route, 3 unique stops, 20939.5 route length\n"
+     std::string outStr = "Bus 256: 6 stops on route, 5 unique stops, 5950 route length, 1.36124 curvature\n"
+                          "Bus 750: 5 stops on route, 3 unique stops, 27600 route length, 1.31808 curvature\n"
                           "Bus 751: not found\n"
                           "Stop Samara: not found\n"
                           "Stop Prazhskaya: no buses\n"
@@ -700,9 +793,8 @@ int main()
 //     RUN_TEST( testRunner, TransportTest );
 //     RUN_TEST( testRunner, ParsingStopTest );
 //     RUN_TEST( testRunner, ParsingBusTest );
-//     RUN_TEST( testRunner, RWTest );
 //     RUN_TEST( testRunner, TrimTest );
-//     RUN_TEST( testRunner, RWTestPartB );
+//     RUN_TEST( testRunner, RWTestPartC );
 //     return 0;
 
      auto requests = ReadRequests();
