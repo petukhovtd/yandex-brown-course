@@ -8,5 +8,10 @@ add_compile_options( -Wall )
 #add_compile_options( -Werror )
 add_compile_options( -Wpedantic )
 
-add_executable(yandex_brown_course transport_a.cpp)
+add_executable(yandex_brown_course
+          stop.cpp
+          bus.cpp
+          transport.cpp
+          transport_d.cpp
+          json.cpp)
 target_link_libraries(yandex_brown_course pthread)
