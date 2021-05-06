@@ -66,4 +66,14 @@ Bus::LengthInfo Bus::GetLength( const LengthCalculator& lengthCalculator )
      return lengthInfo_.value();
 }
 
+Bus::Type Bus::GetBusType() const
+{
+     return type_;
+}
+
+const std::vector< std::string >& Bus::GetRawStops() const
+{
+     return stops_;
+}
+
 }

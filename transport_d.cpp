@@ -135,6 +135,66 @@ struct GetStopBusList: public GetRequest
      std::string stopName;
 };
 
+struct GetRoute: public GetRequest
+{
+     ~GetRoute() override = default;
+
+     void ParsingFrom( const Json::Node& request ) override
+     {
+          const auto& requestMap = request.AsMap();
+          id = requestMap.at( "id" ).AsInt();
+          from = requestMap.at( "from" ).AsString();
+          to = requestMap.at( "to" ).AsString();
+     }
+
+     Json::Node Process( Transport& transport ) const override
+     {
+          std::map< std::string, Json::Node > result;
+          result[ "request_id" ] = id;
+          auto routeResult = transport.GetRoute( from, to );
+          if( auto res = std::get_if< Transport::RouteResult >( &routeResult ) )
+          {
+               result[ "total_time" ] = res->time;
+               std::vector< Json::Node > jsonItems;
+               jsonItems.reserve( res->items.size() );
+               for( auto const& item: res->items )
+               {
+                    jsonItems.push_back( item->GetItemInfo() );
+               }
+               result[ "items" ] = jsonItems;
+          }
+          else
+          {
+               result[ "error_message" ] = std::get< std::string >( routeResult );
+          }
+          return Json::Node( result );
+     }
+
+     std::string from;
+     std::string to;
+};
+
+struct AddSettings: public AddRequest
+{
+     ~AddSettings() override = default;
+
+     void ParsingFrom( const Json::Node& request ) override
+     {
+          busWaitTime = request.AsMap().at( "bus_wait_time" ).AsInt();
+          busVelocity = request.AsMap().at( "bus_velocity" ).AsInt();
+     }
+
+     void Process( Transport& transport ) const override
+     {
+          double busVelocityMs = static_cast< double >( busVelocity ) * 1000.0 / 60.0;
+          transport.SetSettings(
+                    { .busWaitTime = static_cast< double >( busWaitTime ), .busVelocity = busVelocityMs } );
+     }
+
+     int busWaitTime = 0;
+     int busVelocity = 0;
+};
+
 RequestPtr ParsingRequest( Request::Type type, const Json::Node& requestNode )
 {
      const std::string& object = requestNode.AsMap().at( "type" ).AsString();
@@ -168,6 +228,23 @@ RequestPtr ParsingRequest( Request::Type type, const Json::Node& requestNode )
                     assert( false );
           }
      }
+     else if( object == "Route" )
+     {
+          switch( type )
+          {
+               case Request::Get:
+                    request = std::make_unique< GetRoute >();
+                    break;
+               case Request::Add:
+               default:
+                    assert( false );
+          }
+     }
+     else
+     {
+          assert( false );
+     }
+
      request->ParsingFrom( requestNode );
      return request;
 }
@@ -180,7 +257,13 @@ std::vector< RequestPtr > ReadRequests( std::istream& in = std::cin )
      const auto& rootMap = root.AsMap();
      const auto& addRequests = rootMap.at( "base_requests" ).AsArray();
      const auto& getRequests = rootMap.at( "stat_requests" ).AsArray();
-     requests.reserve( addRequests.size() + getRequests.size() );
+     requests.reserve( addRequests.size() + getRequests.size() + 1 );
+
+     const auto& settingsRequestNode = rootMap.at( "routing_settings" ).AsMap();
+     RequestPtr settingsRequest = std::make_unique< AddSettings >();
+     settingsRequest->ParsingFrom( settingsRequestNode );
+     requests.push_back( std::move( settingsRequest ) );
+
      for( const auto& request: addRequests )
      {
           requests.push_back( ParsingRequest( Request::Add, request ) );
@@ -189,6 +272,8 @@ std::vector< RequestPtr > ReadRequests( std::istream& in = std::cin )
      {
           requests.push_back( ParsingRequest( Request::Get, request ) );
      }
+
+
 
      return requests;
 }
@@ -410,64 +495,39 @@ void JsonReadTest()
      ASSERT_EQUAL( map.at("double3").AsDouble(), 123 );
 }
 
-void JsonTest()
+void JsonTest1()
 {
      static const std::string inStr = "{\n"
+                                      "  \"routing_settings\": {\n"
+                                      "    \"bus_wait_time\": 6,\n"
+                                      "    \"bus_velocity\": 40\n"
+                                      "  },\n"
                                       "  \"base_requests\": [\n"
                                       "    {\n"
-                                      "      \"type\": \"Stop\",\n"
-                                      "      \"road_distances\": {\n"
-                                      "        \"Marushkino\": 3900\n"
-                                      "      },\n"
-                                      "      \"longitude\": 37.20829,\n"
-                                      "      \"name\": \"Tolstopaltsevo\",\n"
-                                      "      \"latitude\": 55.611087\n"
-                                      "    },\n"
-                                      "    {\n"
-                                      "      \"type\": \"Stop\",\n"
-                                      "      \"road_distances\": {\n"
-                                      "        \"Rasskazovka\": 9900\n"
-                                      "      },\n"
-                                      "      \"longitude\": 37.209755,\n"
-                                      "      \"name\": \"Marushkino\",\n"
-                                      "      \"latitude\": 55.595884\n"
-                                      "    },\n"
-                                      "    {\n"
                                       "      \"type\": \"Bus\",\n"
-                                      "      \"name\": \"256\",\n"
+                                      "      \"name\": \"297\",\n"
                                       "      \"stops\": [\n"
                                       "        \"Biryulyovo Zapadnoye\",\n"
-                                      "        \"Biryusinka\",\n"
-                                      "        \"Universam\",\n"
                                       "        \"Biryulyovo Tovarnaya\",\n"
-                                      "        \"Biryulyovo Passazhirskaya\",\n"
+                                      "        \"Universam\",\n"
                                       "        \"Biryulyovo Zapadnoye\"\n"
                                       "      ],\n"
                                       "      \"is_roundtrip\": true\n"
                                       "    },\n"
                                       "    {\n"
                                       "      \"type\": \"Bus\",\n"
-                                      "      \"name\": \"750\",\n"
+                                      "      \"name\": \"635\",\n"
                                       "      \"stops\": [\n"
-                                      "        \"Tolstopaltsevo\",\n"
-                                      "        \"Marushkino\",\n"
-                                      "        \"Rasskazovka\"\n"
+                                      "        \"Biryulyovo Tovarnaya\",\n"
+                                      "        \"Universam\",\n"
+                                      "        \"Prazhskaya\"\n"
                                       "      ],\n"
                                       "      \"is_roundtrip\": false\n"
                                       "    },\n"
                                       "    {\n"
                                       "      \"type\": \"Stop\",\n"
-                                      "      \"road_distances\": {},\n"
-                                      "      \"longitude\": 37.333324,\n"
-                                      "      \"name\": \"Rasskazovka\",\n"
-                                      "      \"latitude\": 55.632761\n"
-                                      "    },\n"
-                                      "    {\n"
-                                      "      \"type\": \"Stop\",\n"
                                       "      \"road_distances\": {\n"
-                                      "        \"Rossoshanskaya ulitsa\": 7500,\n"
-                                      "        \"Biryusinka\": 1800,\n"
-                                      "        \"Universam\": 2400\n"
+                                      "        \"Biryulyovo Tovarnaya\": 2600\n"
                                       "      },\n"
                                       "      \"longitude\": 37.6517,\n"
                                       "      \"name\": \"Biryulyovo Zapadnoye\",\n"
@@ -476,17 +536,9 @@ void JsonTest()
                                       "    {\n"
                                       "      \"type\": \"Stop\",\n"
                                       "      \"road_distances\": {\n"
-                                      "        \"Universam\": 750\n"
-                                      "      },\n"
-                                      "      \"longitude\": 37.64839,\n"
-                                      "      \"name\": \"Biryusinka\",\n"
-                                      "      \"latitude\": 55.581065\n"
-                                      "    },\n"
-                                      "    {\n"
-                                      "      \"type\": \"Stop\",\n"
-                                      "      \"road_distances\": {\n"
-                                      "        \"Rossoshanskaya ulitsa\": 5600,\n"
-                                      "        \"Biryulyovo Tovarnaya\": 900\n"
+                                      "        \"Prazhskaya\": 4650,\n"
+                                      "        \"Biryulyovo Tovarnaya\": 1380,\n"
+                                      "        \"Biryulyovo Zapadnoye\": 2500\n"
                                       "      },\n"
                                       "      \"longitude\": 37.645687,\n"
                                       "      \"name\": \"Universam\",\n"
@@ -495,7 +547,131 @@ void JsonTest()
                                       "    {\n"
                                       "      \"type\": \"Stop\",\n"
                                       "      \"road_distances\": {\n"
-                                      "        \"Biryulyovo Passazhirskaya\": 1300\n"
+                                      "        \"Universam\": 890\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.653656,\n"
+                                      "      \"name\": \"Biryulyovo Tovarnaya\",\n"
+                                      "      \"latitude\": 55.592028\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {},\n"
+                                      "      \"longitude\": 37.603938,\n"
+                                      "      \"name\": \"Prazhskaya\",\n"
+                                      "      \"latitude\": 55.611717\n"
+                                      "    }\n"
+                                      "  ],\n"
+                                      "  \"stat_requests\": [\n"
+                                      "    {\n"
+                                      "      \"type\": \"Bus\",\n"
+                                      "      \"name\": \"297\",\n"
+                                      "      \"id\": 1\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Bus\",\n"
+                                      "      \"name\": \"635\",\n"
+                                      "      \"id\": 2\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"name\": \"Universam\",\n"
+                                      "      \"id\": 3\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Biryulyovo Zapadnoye\",\n"
+                                      "      \"to\": \"Universam\",\n"
+                                      "      \"id\": 4\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Biryulyovo Zapadnoye\",\n"
+                                      "      \"to\": \"Prazhskaya\",\n"
+                                      "      \"id\": 5\n"
+                                      "    }\n"
+                                      "  ]\n"
+                                      "}\n";
+     std::istringstream in( inStr );
+
+     std::fstream out("../out1.json", std::ios::out | std::ios::trunc);
+
+     auto requests = ReadRequests( in );
+     auto responses = ProcessRequests( requests );
+     PrintResponses( responses, out );
+}
+
+void JsonTest2()
+{
+     static const std::string inStr = "{\n"
+                                      "  \"routing_settings\": {\n"
+                                      "    \"bus_wait_time\": 2,\n"
+                                      "    \"bus_velocity\": 30\n"
+                                      "  },\n"
+                                      "  \"base_requests\": [\n"
+                                      "    {\n"
+                                      "      \"type\": \"Bus\",\n"
+                                      "      \"name\": \"297\",\n"
+                                      "      \"stops\": [\n"
+                                      "        \"Biryulyovo Zapadnoye\",\n"
+                                      "        \"Biryulyovo Tovarnaya\",\n"
+                                      "        \"Universam\",\n"
+                                      "        \"Biryusinka\",\n"
+                                      "        \"Apteka\",\n"
+                                      "        \"Biryulyovo Zapadnoye\"\n"
+                                      "      ],\n"
+                                      "      \"is_roundtrip\": true\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Bus\",\n"
+                                      "      \"name\": \"635\",\n"
+                                      "      \"stops\": [\n"
+                                      "        \"Biryulyovo Tovarnaya\",\n"
+                                      "        \"Universam\",\n"
+                                      "        \"Biryusinka\",\n"
+                                      "        \"TETs 26\",\n"
+                                      "        \"Pokrovskaya\",\n"
+                                      "        \"Prazhskaya\"\n"
+                                      "      ],\n"
+                                      "      \"is_roundtrip\": false\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Bus\",\n"
+                                      "      \"name\": \"828\",\n"
+                                      "      \"stops\": [\n"
+                                      "        \"Biryulyovo Zapadnoye\",\n"
+                                      "        \"TETs 26\",\n"
+                                      "        \"Biryusinka\",\n"
+                                      "        \"Universam\",\n"
+                                      "        \"Pokrovskaya\",\n"
+                                      "        \"Rossoshanskaya ulitsa\"\n"
+                                      "      ],\n"
+                                      "      \"is_roundtrip\": false\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Biryulyovo Tovarnaya\": 2600,\n"
+                                      "        \"TETs 26\": 1100\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.6517,\n"
+                                      "      \"name\": \"Biryulyovo Zapadnoye\",\n"
+                                      "      \"latitude\": 55.574371\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Biryusinka\": 760,\n"
+                                      "        \"Biryulyovo Tovarnaya\": 1380,\n"
+                                      "        \"Pokrovskaya\": 2460\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.645687,\n"
+                                      "      \"name\": \"Universam\",\n"
+                                      "      \"latitude\": 55.587655\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Universam\": 890\n"
                                       "      },\n"
                                       "      \"longitude\": 37.653656,\n"
                                       "      \"name\": \"Biryulyovo Tovarnaya\",\n"
@@ -504,91 +680,277 @@ void JsonTest()
                                       "    {\n"
                                       "      \"type\": \"Stop\",\n"
                                       "      \"road_distances\": {\n"
-                                      "        \"Biryulyovo Zapadnoye\": 1200\n"
+                                      "        \"Apteka\": 210,\n"
+                                      "        \"TETs 26\": 400\n"
                                       "      },\n"
-                                      "      \"longitude\": 37.659164,\n"
-                                      "      \"name\": \"Biryulyovo Passazhirskaya\",\n"
-                                      "      \"latitude\": 55.580999\n"
-                                      "    },\n"
-                                      "    {\n"
-                                      "      \"type\": \"Bus\",\n"
-                                      "      \"name\": \"828\",\n"
-                                      "      \"stops\": [\n"
-                                      "        \"Biryulyovo Zapadnoye\",\n"
-                                      "        \"Universam\",\n"
-                                      "        \"Rossoshanskaya ulitsa\",\n"
-                                      "        \"Biryulyovo Zapadnoye\"\n"
-                                      "      ],\n"
-                                      "      \"is_roundtrip\": true\n"
+                                      "      \"longitude\": 37.64839,\n"
+                                      "      \"name\": \"Biryusinka\",\n"
+                                      "      \"latitude\": 55.581065\n"
                                       "    },\n"
                                       "    {\n"
                                       "      \"type\": \"Stop\",\n"
-                                      "      \"road_distances\": {},\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Biryulyovo Zapadnoye\": 1420\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.652296,\n"
+                                      "      \"name\": \"Apteka\",\n"
+                                      "      \"latitude\": 55.580023\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Pokrovskaya\": 2850\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.642258,\n"
+                                      "      \"name\": \"TETs 26\",\n"
+                                      "      \"latitude\": 55.580685\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Rossoshanskaya ulitsa\": 3140\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.635517,\n"
+                                      "      \"name\": \"Pokrovskaya\",\n"
+                                      "      \"latitude\": 55.603601\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Pokrovskaya\": 3210\n"
+                                      "      },\n"
                                       "      \"longitude\": 37.605757,\n"
                                       "      \"name\": \"Rossoshanskaya ulitsa\",\n"
                                       "      \"latitude\": 55.595579\n"
                                       "    },\n"
                                       "    {\n"
                                       "      \"type\": \"Stop\",\n"
-                                      "      \"road_distances\": {},\n"
-                                      "      \"longitude\": 37.603831,\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Pokrovskaya\": 2260\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.603938,\n"
                                       "      \"name\": \"Prazhskaya\",\n"
-                                      "      \"latitude\": 55.611678\n"
+                                      "      \"latitude\": 55.611717\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Bus\",\n"
+                                      "      \"name\": \"750\",\n"
+                                      "      \"stops\": [\n"
+                                      "        \"Tolstopaltsevo\",\n"
+                                      "        \"Rasskazovka\"\n"
+                                      "      ],\n"
+                                      "      \"is_roundtrip\": false\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Rasskazovka\": 13800\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.20829,\n"
+                                      "      \"name\": \"Tolstopaltsevo\",\n"
+                                      "      \"latitude\": 55.611087\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {},\n"
+                                      "      \"longitude\": 37.333324,\n"
+                                      "      \"name\": \"Rasskazovka\",\n"
+                                      "      \"latitude\": 55.632761\n"
                                       "    }\n"
                                       "  ],\n"
                                       "  \"stat_requests\": [\n"
                                       "    {\n"
                                       "      \"type\": \"Bus\",\n"
-                                      "      \"name\": \"256\",\n"
-                                      "      \"id\": 1965312327\n"
+                                      "      \"name\": \"297\",\n"
+                                      "      \"id\": 1\n"
                                       "    },\n"
                                       "    {\n"
                                       "      \"type\": \"Bus\",\n"
-                                      "      \"name\": \"750\",\n"
-                                      "      \"id\": 519139350\n"
+                                      "      \"name\": \"635\",\n"
+                                      "      \"id\": 2\n"
                                       "    },\n"
                                       "    {\n"
                                       "      \"type\": \"Bus\",\n"
-                                      "      \"name\": \"751\",\n"
-                                      "      \"id\": 194217464\n"
+                                      "      \"name\": \"828\",\n"
+                                      "      \"id\": 3\n"
                                       "    },\n"
                                       "    {\n"
                                       "      \"type\": \"Stop\",\n"
-                                      "      \"name\": \"Samara\",\n"
-                                      "      \"id\": 746888088\n"
+                                      "      \"name\": \"Universam\",\n"
+                                      "      \"id\": 4\n"
                                       "    },\n"
                                       "    {\n"
-                                      "      \"type\": \"Stop\",\n"
-                                      "      \"name\": \"Prazhskaya\",\n"
-                                      "      \"id\": 65100610\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Biryulyovo Zapadnoye\",\n"
+                                      "      \"to\": \"Apteka\",\n"
+                                      "      \"id\": 5\n"
                                       "    },\n"
                                       "    {\n"
-                                      "      \"type\": \"Stop\",\n"
-                                      "      \"name\": \"Biryulyovo Zapadnoye\",\n"
-                                      "      \"id\": 1042838872\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Biryulyovo Zapadnoye\",\n"
+                                      "      \"to\": \"Pokrovskaya\",\n"
+                                      "      \"id\": 6\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Biryulyovo Tovarnaya\",\n"
+                                      "      \"to\": \"Pokrovskaya\",\n"
+                                      "      \"id\": 7\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Biryulyovo Tovarnaya\",\n"
+                                      "      \"to\": \"Biryulyovo Zapadnoye\",\n"
+                                      "      \"id\": 8\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Biryulyovo Tovarnaya\",\n"
+                                      "      \"to\": \"Prazhskaya\",\n"
+                                      "      \"id\": 9\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Apteka\",\n"
+                                      "      \"to\": \"Biryulyovo Tovarnaya\",\n"
+                                      "      \"id\": 10\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Biryulyovo Zapadnoye\",\n"
+                                      "      \"to\": \"Tolstopaltsevo\",\n"
+                                      "      \"id\": 11\n"
                                       "    }\n"
                                       "  ]\n"
                                       "}\n";
      std::istringstream in( inStr );
 
-     std::fstream out("../out.json", std::ios::out | std::ios::trunc);
+     std::fstream out("../out2.json", std::ios::out | std::ios::trunc);
 
      auto requests = ReadRequests( in );
      auto responses = ProcessRequests( requests );
      PrintResponses( responses, out );
+}
 
+void JsonTest3()
+{
+     static const std::string inStr = "{\n"
+                                      "  \"routing_settings\": {\n"
+                                      "    \"bus_wait_time\": 2,\n"
+                                      "    \"bus_velocity\": 30\n"
+                                      "  },\n"
+                                      "  \"base_requests\": [\n"
+                                      "    {\n"
+                                      "      \"type\": \"Bus\",\n"
+                                      "      \"name\": \"289\",\n"
+                                      "      \"stops\": [\n"
+                                      "        \"Zagorye\",\n"
+                                      "        \"Lipetskaya ulitsa 46\",\n"
+                                      "        \"Lipetskaya ulitsa 40\",\n"
+                                      "        \"Lipetskaya ulitsa 40\",\n"
+                                      "        \"Lipetskaya ulitsa 46\",\n"
+                                      "        \"Moskvorechye\",\n"
+                                      "        \"Zagorye\"\n"
+                                      "      ],\n"
+                                      "      \"is_roundtrip\": true\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Lipetskaya ulitsa 46\": 230\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.68372,\n"
+                                      "      \"name\": \"Zagorye\",\n"
+                                      "      \"latitude\": 55.579909\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Lipetskaya ulitsa 40\": 390,\n"
+                                      "        \"Moskvorechye\": 12400\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.682205,\n"
+                                      "      \"name\": \"Lipetskaya ulitsa 46\",\n"
+                                      "      \"latitude\": 55.581441\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Lipetskaya ulitsa 40\": 1090,\n"
+                                      "        \"Lipetskaya ulitsa 46\": 380\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.679133,\n"
+                                      "      \"name\": \"Lipetskaya ulitsa 40\",\n"
+                                      "      \"latitude\": 55.584496\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Stop\",\n"
+                                      "      \"road_distances\": {\n"
+                                      "        \"Zagorye\": 10000\n"
+                                      "      },\n"
+                                      "      \"longitude\": 37.638433,\n"
+                                      "      \"name\": \"Moskvorechye\",\n"
+                                      "      \"latitude\": 55.638433\n"
+                                      "    }\n"
+                                      "  ],\n"
+                                      "  \"stat_requests\": [\n"
+                                      "    {\n"
+                                      "      \"type\": \"Bus\",\n"
+                                      "      \"name\": \"289\",\n"
+                                      "      \"id\": 1\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Zagorye\",\n"
+                                      "      \"to\": \"Moskvorechye\",\n"
+                                      "      \"id\": 2\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Moskvorechye\",\n"
+                                      "      \"to\": \"Zagorye\",\n"
+                                      "      \"id\": 3\n"
+                                      "    },\n"
+                                      "    {\n"
+                                      "      \"type\": \"Route\",\n"
+                                      "      \"from\": \"Lipetskaya ulitsa 40\",\n"
+                                      "      \"to\": \"Lipetskaya ulitsa 40\",\n"
+                                      "      \"id\": 4\n"
+                                      "    }\n"
+                                      "  ]\n"
+                                      "}\n";
+     std::istringstream in( inStr );
 
+     std::fstream out("../out3.json", std::ios::out | std::ios::trunc);
+
+     auto requests = ReadRequests( in );
+     auto responses = ProcessRequests( requests );
+     PrintResponses( responses, out );
+}
+
+void JsonTest4()
+{
+     std::fstream in( "../transport-input4.json" );
+
+     std::fstream out("../out4.json", std::ios::out | std::ios::trunc);
+
+     auto requests = ReadRequests( in );
+     auto responses = ProcessRequests( requests );
+     PrintResponses( responses, out );
 }
 
 int main()
 {
-//     TestRunner testRunner;
-//     RUN_TEST( testRunner, BusTest );
-//     RUN_TEST( testRunner, StopTest );
-//     RUN_TEST( testRunner, TransportTest );
-//     RUN_TEST( testRunner, JsonReadTest );
-//     RUN_TEST( testRunner, JsonTest );
-//     return 0;
+     TestRunner testRunner;
+     RUN_TEST( testRunner, BusTest );
+     RUN_TEST( testRunner, StopTest );
+     RUN_TEST( testRunner, TransportTest );
+     RUN_TEST( testRunner, JsonReadTest );
+     RUN_TEST( testRunner, JsonTest1 );
+     RUN_TEST( testRunner, JsonTest2 );
+     RUN_TEST( testRunner, JsonTest3 );
+     RUN_TEST( testRunner, JsonTest4 );
+     return 0;
 
      auto requests = ReadRequests();
      auto responses = ProcessRequests( requests );

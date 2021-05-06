@@ -58,6 +58,10 @@ public:
 
      LengthInfo GetLength( const LengthCalculator& lengthCalculator );
 
+     Type GetBusType() const;
+
+     const std::vector< std::string >& GetRawStops() const;
+
 private:
      Type type_;
      std::optional< LengthInfo > lengthInfo_;
