@@ -941,16 +941,16 @@ void JsonTest4()
 
 int main()
 {
-     TestRunner testRunner;
-     RUN_TEST( testRunner, BusTest );
-     RUN_TEST( testRunner, StopTest );
-     RUN_TEST( testRunner, TransportTest );
-     RUN_TEST( testRunner, JsonReadTest );
-     RUN_TEST( testRunner, JsonTest1 );
-     RUN_TEST( testRunner, JsonTest2 );
-     RUN_TEST( testRunner, JsonTest3 );
-     RUN_TEST( testRunner, JsonTest4 );
-     return 0;
+//     TestRunner testRunner;
+//     RUN_TEST( testRunner, BusTest );
+//     RUN_TEST( testRunner, StopTest );
+//     RUN_TEST( testRunner, TransportTest );
+//     RUN_TEST( testRunner, JsonReadTest );
+//     RUN_TEST( testRunner, JsonTest1 );
+//     RUN_TEST( testRunner, JsonTest2 );
+//     RUN_TEST( testRunner, JsonTest3 );
+//     RUN_TEST( testRunner, JsonTest4 );
+//     return 0;
 
      auto requests = ReadRequests();
      auto responses = ProcessRequests( requests );
